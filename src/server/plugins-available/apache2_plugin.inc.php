@@ -946,7 +946,6 @@ class apache2_plugin {
 		$bundle_file = $ssl_dir.'/'.$domain.'.bundle';
 
 		if($data['new']['ssl'] == 'y' && $data['new']['ssl_letsencrypt'] == 'y') {
-			$domain = $data['new']['domain'];
 			if(substr($domain, 0, 2) === '*.') {
 				// wildcard domain not yet supported by letsencrypt!
 				$app->log('Wildcard domains not yet supported by letsencrypt, so changing ' . $domain . ' to ' . substr($domain, 2), LOGLEVEL_WARN);
@@ -1023,9 +1022,9 @@ class apache2_plugin {
 			unset($subdomains);
 			unset($temp_domains);
 
-			$crt_tmp_file = "/etc/letsencrypt/live/".$domain."/cert.pem";
-			$key_tmp_file = "/etc/letsencrypt/live/".$domain."/privkey.pem";
-			$bundle_tmp_file = "/etc/letsencrypt/live/".$domain."/chain.pem";
+			$crt_tmp_file = "/etc/acme.sh/".$domain."/".$domain.".cer";
+			$key_tmp_file = "/etc/acme.sh/".$domain."/".$domain.".key";
+			$bundle_tmp_file = "/etc/acme.sh/".$domain."/fullchain.cer";
 			$webroot = $data['new']['document_root']."/".$web_folder;
 
 			//* check if we have already a Let's Encrypt cert
