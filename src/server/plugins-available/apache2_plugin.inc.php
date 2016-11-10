@@ -1000,12 +1000,8 @@ class apache2_plugin {
 			if(is_array($aliasdomains)) {
 				foreach($aliasdomains as $aliasdomain) {
 					$temp_domains[] = $aliasdomain['domain'];
-					if(isset($aliasdomain['subdomain']) && ! empty($aliasdomain['subdomain'])) {
-						$temp_domains[] = $aliasdomain['subdomain'] . "." . $aliasdomain['domain'];
-					}
-
-					foreach($sub_prefixes as $s) {
-						$temp_domains[] = $s . $aliasdomain['domain'];
+					if(isset($aliasdomain['subdomain']) && substr($aliasdomain['domain'],0,4) != 'www.' && ($aliasdomain['subdomain'] == "www" OR $aliasdomain['subdomain'] == "*")) {
+						$temp_domains[] = "www." . $aliasdomain['domain'];
 					}
 				}
 			}
