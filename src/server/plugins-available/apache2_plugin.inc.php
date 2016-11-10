@@ -1038,7 +1038,7 @@ class apache2_plugin {
 				$letsencrypt = explode("\n", shell_exec('which '));
 				$letsencrypt = reset($letsencrypt);
 				if(is_executable($letsencrypt)) {
-					$success = $this->_exec($letsencrypt . " --isue --domain $lddomain --webroot $webroot --log");
+					$success = $this->_exec($letsencrypt . " --issue --domain $lddomain --webroot $webroot --log");
 				}
 				if(!$success) {
 					// error issuing cert
