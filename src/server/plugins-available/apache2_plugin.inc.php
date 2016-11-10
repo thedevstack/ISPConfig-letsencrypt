@@ -36,6 +36,7 @@ class apache2_plugin {
 	// private variables
 	var $action = '';
 	var $ssl_certificate_changed = false;
+	var $update_letsencrypt = false;
 
 	//* This function is called during ispconfig installation to determine
 	//  if a symlink shall be created for this plugin.
@@ -331,6 +332,7 @@ class apache2_plugin {
 			$data['new'] = $tmp;
 			$data['old'] = $tmp;
 			$this->action = 'update';
+			$this->update_letsencrypt = true;
 		}
 
 		// load the server configuration options
@@ -936,19 +938,168 @@ class apache2_plugin {
 		// Check if a SSL cert exists
 		$ssl_dir = $data['new']['document_root'].'/ssl';
 		$domain = $data['new']['ssl_domain'];
+		if(!$domain) $domain = $data['new']['domain'];
 		$key_file = $ssl_dir.'/'.$domain.'.key';
+		$key_file2 = $ssl_dir.'/'.$domain.'.key.org';
+		$csr_file = $ssl_dir.'/'.$domain.'.csr';
 		$crt_file = $ssl_dir.'/'.$domain.'.crt';
 		$bundle_file = $ssl_dir.'/'.$domain.'.bundle';
 
-		/*
-		if($domain!='' && $data['new']['ssl'] == 'y' && @is_file($crt_file) && @is_file($key_file) && (@filesize($crt_file)>0)  && (@filesize($key_file)>0)) {
-			$vhost_data['ssl_enabled'] = 1;
-			$app->log('Enable SSL for: '.$domain,LOGLEVEL_DEBUG);
-		} else {
-			$vhost_data['ssl_enabled'] = 0;
-			$app->log('SSL Disabled. '.$domain,LOGLEVEL_DEBUG);
+		if($data['new']['ssl'] == 'y' && $data['new']['ssl_letsencrypt'] == 'y') {
+			$domain = $data['new']['domain'];
+			if(substr($domain, 0, 2) === '*.') {
+				// wildcard domain not yet supported by letsencrypt!
+				$app->log('Wildcard domains not yet supported by letsencrypt, so changing ' . $domain . ' to ' . substr($domain, 2), LOGLEVEL_WARN);
+				$domain = substr($domain, 2);
+			}
+			
+			$data['new']['ssl_domain'] = $domain;
+			$vhost_data['ssl_domain'] = $domain;
+
+			$key_file = $ssl_dir.'/'.$domain.'-le.key';
+			$key_file2 = $ssl_dir.'/'.$domain.'-le.key.org';
+			$crt_file = $ssl_dir.'/'.$domain.'-le.crt';
+			$bundle_file = $ssl_dir.'/'.$domain.'-le.bundle';
 		}
-		*/
+
+		$vhost_data['ssl_crt_file'] = $crt_file;
+		$vhost_data['ssl_key_file'] = $key_file;
+		$vhost_data['ssl_bundle_file'] = $bundle_file;
+
+		//* Generate Let's Encrypt SSL certificat
+		if($data['new']['ssl'] == 'y' && $data['new']['ssl_letsencrypt'] == 'y' && ( // ssl and let's encrypt is active
+			($data['old']['ssl'] == 'n' OR $data['old']['ssl_letsencrypt'] == 'n') // we have new let's encrypt configuration
+			OR ($data['old']['domain'] != $data['new']['domain']) // we have domain update
+			OR ($data['old']['subdomain'] != $data['new']['subdomain']) // we have new or update on "auto" subdomain
+			OR ($data['new']['type'] == 'subdomain') // we have new or update on subdomain
+			OR ($data['old']['type'] == 'alias' OR $data['new']['type'] == 'alias') // we have new or update on alias domain
+			OR $this->update_letsencrypt == true
+		)) {
+			// default values
+			$temp_domains = array();
+			$lddomain     = $domain;
+			$subdomains   = null;
+			$aliasdomains = null;
+			$sub_prefixes = array();
+
+			//* be sure to have good domain
+			if(substr($domain,0,4) != 'www.' && ($data['new']['subdomain'] == "www" OR $data['new']['subdomain'] == "*")) {
+				$temp_domains[] = "www." . $domain;
+			}
+
+			//* then, add subdomain if we have
+			$subdomains = $app->db->queryAllRecords('SELECT domain FROM web_domain WHERE parent_domain_id = '.intval($data['new']['domain_id'])." AND active = 'y' AND type = 'subdomain'");
+			if(is_array($subdomains)) {
+				foreach($subdomains as $subdomain) {
+					$temp_domains[] = $subdomain['domain'];
+					$sub_prefixes[] = str_replace($domain, "", $subdomain['domain']);
+				}
+			}
+
+			//* then, add alias domain if we have
+			$aliasdomains = $app->db->queryAllRecords('SELECT domain,subdomain FROM web_domain WHERE parent_domain_id = '.intval($data['new']['domain_id'])." AND active = 'y' AND type = 'alias'");
+			if(is_array($aliasdomains)) {
+				foreach($aliasdomains as $aliasdomain) {
+					$temp_domains[] = $aliasdomain['domain'];
+					if(isset($aliasdomain['subdomain']) && ! empty($aliasdomain['subdomain'])) {
+						$temp_domains[] = $aliasdomain['subdomain'] . "." . $aliasdomain['domain'];
+					}
+
+					foreach($sub_prefixes as $s) {
+						$temp_domains[] = $s . $aliasdomain['domain'];
+					}
+				}
+			}
+
+			// prevent duplicate
+			$temp_domains = array_unique($temp_domains);
+
+			// generate cli format
+			foreach($temp_domains as $temp_domain) {
+				$lddomain .= (string) " --domain " . $temp_domain;
+			}
+
+			// useless data
+			unset($subdomains);
+			unset($temp_domains);
+
+			$crt_tmp_file = "/etc/letsencrypt/live/".$domain."/cert.pem";
+			$key_tmp_file = "/etc/letsencrypt/live/".$domain."/privkey.pem";
+			$bundle_tmp_file = "/etc/letsencrypt/live/".$domain."/chain.pem";
+			$webroot = $data['new']['document_root']."/".$web_folder;
+
+			//* check if we have already a Let's Encrypt cert
+			//if(!file_exists($crt_tmp_file) && !file_exists($key_tmp_file)) {
+				// we must not skip if cert exists, otherwise changed domains (alias or sub) won't make it to the cert
+				$app->log("Create Let's Encrypt SSL Cert for: $domain", LOGLEVEL_DEBUG);
+				$app->log("Let's Encrypt SSL Cert domains: $lddomain", LOGLEVEL_DEBUG);
+				
+				$success = false;
+				$letsencrypt = explode("\n", shell_exec('which '));
+				$letsencrypt = reset($letsencrypt);
+				if(is_executable($letsencrypt)) {
+					$success = $this->_exec($letsencrypt . " --isue --domain $lddomain --webroot $webroot --log");
+				}
+				if(!$success) {
+					// error issuing cert
+					$app->log('Let\'s Encrypt SSL Cert for: ' . $domain . ' could not be issued.', LOGLEVEL_WARN);
+					$data['new']['ssl_letsencrypt'] = 'n';
+					if($data['old']['ssl'] == 'n') $data['new']['ssl'] = 'n';
+					/* Update the DB of the (local) Server */
+					$app->db->query("UPDATE web_domain SET `ssl` = '".$data['new']['ssl']."', `ssl_letsencrypt` = 'n' WHERE `domain` = '".$data['new']['domain']."'");
+					/* Update also the master-DB of the Server-Farm */
+					$app->dbmaster->query("UPDATE web_domain SET `ssl` = '".$data['new']['ssl']."', `ssl_letsencrypt` = 'n' WHERE `domain` = '".$data['new']['domain']."'");
+				}
+			//}
+
+			//* check is been correctly created
+			if(file_exists($crt_tmp_file)) {
+				$date = date("YmdHis");
+				if(is_file($key_file)) {
+					$app->system->copy($key_file, $key_file.'.old.'.$date);
+					$app->system->chmod($key_file.'.old.'.$date, 0400);
+					$app->system->unlink($key_file);
+				}
+
+				if ($web_config["website_symlinks_rel"] == 'y') {
+					$this->create_relative_link(escapeshellcmd($key_tmp_file), escapeshellcmd($key_file));
+				} else {
+					exec("ln -s ".escapeshellcmd($key_tmp_file)." ".escapeshellcmd($key_file));
+				}
+
+				if(is_file($crt_file)) {
+					$app->system->copy($crt_file, $crt_file.'.old.'.$date);
+					$app->system->chmod($crt_file.'.old.'.$date, 0400);
+					$app->system->unlink($crt_file);
+				}
+
+				if($web_config["website_symlinks_rel"] == 'y') {
+					$this->create_relative_link(escapeshellcmd($crt_tmp_file), escapeshellcmd($crt_file));
+				} else {
+					exec("ln -s ".escapeshellcmd($crt_tmp_file)." ".escapeshellcmd($crt_file));
+				}
+
+				if(is_file($bundle_file)) {
+					$app->system->copy($bundle_file, $bundle_file.'.old.'.$date);
+					$app->system->chmod($bundle_file.'.old.'.$date, 0400);
+					$app->system->unlink($bundle_file);
+				}
+
+				if($web_config["website_symlinks_rel"] == 'y') {
+					$this->create_relative_link(escapeshellcmd($bundle_tmp_file), escapeshellcmd($bundle_file));
+				} else {
+					exec("ln -s ".escapeshellcmd($bundle_tmp_file)." ".escapeshellcmd($bundle_file));
+				}
+
+				/* we don't need to store it.
+				/* Update the DB of the (local) Server */
+				$app->db->query("UPDATE web_domain SET ssl_request = '', ssl_cert = '', ssl_key = '' WHERE domain = '".$data['new']['domain']."'");
+				$app->db->query("UPDATE web_domain SET ssl_action = '' WHERE domain = '".$data['new']['domain']."'");
+				/* Update also the master-DB of the Server-Farm */
+				$app->dbmaster->query("UPDATE web_domain SET ssl_request = '', ssl_cert = '', ssl_key = '' WHERE domain = '".$data['new']['domain']."'");
+				$app->dbmaster->query("UPDATE web_domain SET ssl_action = '' WHERE domain = '".$data['new']['domain']."'");
+			}
+		}
 
 		if(@is_file($bundle_file)) $vhost_data['has_bundle_cert'] = 1;
 
@@ -1754,6 +1905,7 @@ class apache2_plugin {
 			$data['new'] = $tmp;
 			$data['old'] = $tmp;
 			$this->action = 'update';
+			$this->update_letsencrypt = true;
 			// just run the update function
 			$this->update($event_name, $data);
 
@@ -2662,7 +2814,10 @@ class apache2_plugin {
 		$tpl->newTemplate('php_fpm_pool.conf.master');
 		$tpl->setVar('apache_version', $app->system->getapacheversion());
 		
-		if($data['new']['php_fpm_use_socket'] == 'y'){
+		$apache_modules = $app->system->getapachemodules();
+		
+		// Use sockets, but not with apache 2.4 on centos (mod_proxy_fcgi) as socket support is buggy in that version
+		if($data['new']['php_fpm_use_socket'] == 'y' && in_array('fastcgi_module',$apache_modules)){
 			$use_tcp = 0;
 			$use_socket = 1;
 			if(!is_dir($socket_dir)) $app->system->mkdirpath($socket_dir);
