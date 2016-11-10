@@ -955,10 +955,10 @@ class apache2_plugin {
 			$data['new']['ssl_domain'] = $domain;
 			$vhost_data['ssl_domain'] = $domain;
 
-			$key_file = $ssl_dir.'/'.$domain.'-le.key';
-			$key_file2 = $ssl_dir.'/'.$domain.'-le.key.org';
-			$crt_file = $ssl_dir.'/'.$domain.'-le.crt';
-			$bundle_file = $ssl_dir.'/'.$domain.'-le.bundle';
+			$key_file = $ssl_dir.'/'.$domain.'.key';
+			$key_file2 = $ssl_dir.'/'.$domain.'.key.org';
+			$crt_file = $ssl_dir.'/'.$domain.'.crt';
+			$bundle_file = $ssl_dir.'/'.$domain.'.bundle';
 		}
 
 		$vhost_data['ssl_crt_file'] = $crt_file;
@@ -1037,9 +1037,10 @@ class apache2_plugin {
 				$letsencrypt = explode("\n", shell_exec('which acme.sh /etc/acme.sh/acme.sh'));
 				$letsencrypt = reset($letsencrypt);
 				if(is_executable($letsencrypt)) {
+					$app->log($letsencrypt . " --issue --domain $lddomain --webroot $webroot --log", LOGLEVEL_DEBUG);
 					$success = $this->_exec($letsencrypt . " --issue --domain $lddomain --webroot $webroot --log");
 				}
-				if(!$success) {
+				if(!file_exists($crt_tmp_file) || !file_exists($key_tmp_file) || !file_exists($bundle_tmp_file)) {
 					// error issuing cert
 					$app->log('Let\'s Encrypt SSL Cert for: ' . $domain . ' could not be issued.', LOGLEVEL_WARN);
 					$data['new']['ssl_letsencrypt'] = 'n';
