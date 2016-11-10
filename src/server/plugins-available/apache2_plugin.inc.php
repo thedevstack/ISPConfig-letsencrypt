@@ -1034,7 +1034,7 @@ class apache2_plugin {
 				$app->log("Let's Encrypt SSL Cert domains: $lddomain", LOGLEVEL_DEBUG);
 				
 				$success = false;
-				$letsencrypt = explode("\n", shell_exec('which '));
+				$letsencrypt = explode("\n", shell_exec('which acme.sh /etc/acme.sh/acme.sh'));
 				$letsencrypt = reset($letsencrypt);
 				if(is_executable($letsencrypt)) {
 					$success = $this->_exec($letsencrypt . " --issue --domain $lddomain --webroot $webroot --log");
