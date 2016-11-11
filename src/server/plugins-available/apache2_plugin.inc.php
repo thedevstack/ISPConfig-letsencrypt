@@ -1021,7 +1021,7 @@ class apache2_plugin {
 			$crt_tmp_file = "/etc/acme.sh/".$domain."/".$domain.".cer";
 			$key_tmp_file = "/etc/acme.sh/".$domain."/".$domain.".key";
 			$bundle_tmp_file = "/etc/acme.sh/".$domain."/fullchain.cer";
-			$webroot = $data['new']['document_root']."/".$web_folder;
+			$webroot = "/var/www/acme";
 
 			//* check if we have already a Let's Encrypt cert
 			//if(!file_exists($crt_tmp_file) && !file_exists($key_tmp_file)) {
